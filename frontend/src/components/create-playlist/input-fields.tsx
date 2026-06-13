@@ -30,6 +30,12 @@ export default function InputFields() {
     const [errorMessage, setErrorMessage] = useState<React.ReactNode>("");
     const [cloneError, setCloneError] = useState(false);
     const [coverDownloadUrl, setCoverDownloadUrl] = useState("");
+    const [cloneProgress, setCloneProgress] = useState("Starting clone...");
+    const [foundTracks, setFoundTracks] = useState<number | null>(null);
+    const [sourceTracks, setSourceTracks] = useState<number | null>(null);
+    const [refreshHeaders, setRefreshHeaders] = useState("");
+    const [refreshHeadersDialog, setRefreshHeadersDialog] = useState(false);
+    const [pendingJobId, setPendingJobId] = useState("");
     const [cloneErrorMessage, setCloneErrorMessage] =
         useState<React.ReactNode>("");
     const [missedTracksDialog, setMissedTracksDialog] = useState(false);
@@ -54,90 +60,126 @@ export default function InputFields() {
         setIsValidUrl(validateUrl(url) || url === "");
     };
 
-    async function clonePlaylist() {
-        const body = {
-            playlist_link: playlistUrl,
-            auth_headers: authHeaders,
-        };
-
+    async function pollCloneJob(jobId: string) {
         const sleep = (ms: number) =>
             new Promise((resolve) => setTimeout(resolve, ms));
 
+        while (true) {
+            await sleep(3000);
+            const statusRes = await fetch(
+                `${import.meta.env.VITE_API_URL}/jobs/${jobId}`,
+                { method: "GET" }
+            );
+            const statusData = await statusRes.json();
+
+            if (!statusRes.ok) {
+                throw new Error(
+                    statusData.message || "Failed to get clone job status"
+                );
+            }
+
+            setCloneProgress(statusData.message || "Cloning playlist...");
+            if (typeof statusData.found_tracks === "number") {
+                setFoundTracks(statusData.found_tracks);
+            }
+            if (typeof statusData.source_tracks === "number") {
+                setSourceTracks(statusData.source_tracks);
+            }
+
+            if (statusData.status === "needs_auth") {
+                setPendingJobId(jobId);
+                setRefreshHeaders("");
+                setdialogOpen(false);
+                setRefreshHeadersDialog(true);
+                return;
+            }
+
+            if (statusData.status === "complete") {
+                setCoverDownloadUrl(
+                    statusData.has_cover
+                        ? `${import.meta.env.VITE_API_URL}/jobs/${jobId}/cover`
+                        : ""
+                );
+                if (statusData.missed_tracks?.count > 0) {
+                    setMissedTracks(statusData.missed_tracks);
+                    setMissedTracksDialog(true);
+                }
+                setdialogOpen(false);
+                setStarPrompt(true);
+                return;
+            }
+
+            if (statusData.status === "failed") {
+                throw new Error(
+                    statusData.message || "Server error while cloning playlist"
+                );
+            }
+        }
+    }
+
+    async function clonePlaylist() {
         try {
+            setCloneProgress("Starting playlist clone...");
+            setFoundTracks(null);
+            setSourceTracks(null);
             setdialogOpen(true);
             const res = await fetch(`${import.meta.env.VITE_API_URL}/create`, {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify(body),
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    playlist_link: playlistUrl,
+                    auth_headers: authHeaders,
+                }),
             });
             const data = await res.json();
 
             if (!res.ok) {
-                setCloneError(true);
-                setCloneErrorMessage(
-                    data.message || "Failed to start playlist clone"
-                );
-                return;
+                throw new Error(data.message || "Failed to start playlist clone");
             }
 
             const jobId = data.job_id;
             if (!jobId) {
-                setCloneError(true);
-                setCloneErrorMessage("Server did not return a clone job id");
-                return;
+                throw new Error("Server did not return a clone job id");
             }
-
-            while (true) {
-                await sleep(3000);
-                const statusRes = await fetch(
-                    `${import.meta.env.VITE_API_URL}/jobs/${jobId}`,
-                    {
-                        method: "GET",
-                        headers: { "Content-Type": "application/json" },
-                    }
-                );
-                const statusData = await statusRes.json();
-
-                if (!statusRes.ok) {
-                    setCloneError(true);
-                    setCloneErrorMessage(
-                        statusData.message || "Failed to get clone job status"
-                    );
-                    return;
-                }
-
-                if (statusData.status === "complete") {
-                    setCoverDownloadUrl(
-                        statusData.has_cover
-                            ? `${import.meta.env.VITE_API_URL}/jobs/${jobId}/cover`
-                            : ""
-                    );
-                    if (statusData.missed_tracks?.count > 0) {
-                        setMissedTracks(statusData.missed_tracks);
-                        setMissedTracksDialog(true);
-                    }
-                    setStarPrompt(true);
-                    return;
-                }
-
-                if (statusData.status === "failed") {
-                    setCloneError(true);
-                    setCloneErrorMessage(
-                        statusData.message ||
-                            "Server error while cloning playlist"
-                    );
-                    return;
-                }
-            }
-        } catch {
+            await pollCloneJob(jobId);
+        } catch (error) {
+            setdialogOpen(false);
             setCloneError(true);
             setCloneErrorMessage(
-                "Network error while checking playlist clone status"
+                error instanceof Error
+                    ? error.message
+                    : "Network error while checking playlist clone status"
             );
-        } finally {
+        }
+    }
+
+    async function resumeClone() {
+        try {
+            setRefreshHeadersDialog(false);
+            setCloneProgress("Resuming playlist write...");
+            setdialogOpen(true);
+            const res = await fetch(
+                `${import.meta.env.VITE_API_URL}/jobs/${pendingJobId}/resume`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ auth_headers: refreshHeaders }),
+                }
+            );
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.message || "Failed to resume playlist write");
+            }
+            setAuthHeaders(refreshHeaders);
+            await pollCloneJob(pendingJobId);
+        } catch (error) {
             setdialogOpen(false);
+            setCloneError(true);
+            setCloneErrorMessage(
+                error instanceof Error
+                    ? error.message
+                    : "Network error while resuming playlist write"
+            );
         }
     }
 
@@ -316,7 +358,18 @@ export default function InputFields() {
                                         Fetching playlist...
                                     </AlertDialogTitle>
                                     <AlertDialogDescription>
-                                        This may take a few minutes
+                                        <span className="block">
+                                            {cloneProgress}
+                                        </span>
+                                        {foundTracks !== null && (
+                                            <span className="block mt-2 font-medium">
+                                                Found {foundTracks}
+                                                {sourceTracks !== null
+                                                    ? ` of ${sourceTracks}`
+                                                    : ""}{" "}
+                                                Spotify songs
+                                            </span>
+                                        )}
                                     </AlertDialogDescription>
                                 </AlertDialogHeader>
                             </AlertDialogContent>
@@ -336,6 +389,15 @@ export default function InputFields() {
                                     </AlertDialogTitle>
                                     <AlertDialogDescription>
                                         <div className="ml-12 mb-2">
+                                            {foundTracks !== null && (
+                                                <p className="font-medium mb-2">
+                                                    Found {foundTracks}
+                                                    {sourceTracks !== null
+                                                        ? ` of ${sourceTracks}`
+                                                        : ""}{" "}
+                                                    Spotify songs.
+                                                </p>
+                                            )}
                                             <p>
                                                 Please consider starring the
                                                 project on GitHub.
@@ -392,6 +454,49 @@ export default function InputFields() {
                         >
                             Try Again
                         </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+            <AlertDialog
+                open={refreshHeadersDialog}
+                onOpenChange={setRefreshHeadersDialog}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>
+                            YouTube Music headers expired
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                            The song search is saved. Generate fresh headers
+                            from the same signed-in YouTube Music account and
+                            paste them below. SpotTransfer will resume writing
+                            the existing playlist without searching again.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <Textarea
+                        placeholder="Paste fresh YouTube Music headers here"
+                        value={refreshHeaders}
+                        onChange={(event) =>
+                            setRefreshHeaders(event.target.value)
+                        }
+                        className="min-h-[240px]"
+                    />
+                    {foundTracks !== null && (
+                        <p className="text-sm text-gray-500">
+                            Search saved: {foundTracks}
+                            {sourceTracks !== null
+                                ? ` of ${sourceTracks}`
+                                : ""}{" "}
+                            songs found.
+                        </p>
+                    )}
+                    <AlertDialogFooter>
+                        <Button
+                            onClick={resumeClone}
+                            disabled={!refreshHeaders.trim() || !pendingJobId}
+                        >
+                            Resume playlist write
+                        </Button>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

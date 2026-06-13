@@ -61,6 +61,28 @@ JAPANESE_TRANSLITERATOR = kakasi()
 JAPANESE_CHARACTER_PATTERN = re.compile(
     "[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff]"
 )
+VERSION_PATTERNS = {
+    "remix": r"\b(remix|mix)\b",
+    "sped_up": r"\b(sped|speed)\s*up\b",
+    "slowed": r"\b(slowed|slow)\b",
+    "extended": r"\bextended\b",
+    "nightcore": r"\bnightcore\b",
+    "live": r"\blive\b",
+    "cover": r"\bcover\b",
+    "instrumental": r"\binstrumental\b",
+    "karaoke": r"\bkaraoke\b",
+    "edit": r"\bedit\b",
+}
+
+
+class YouTubeAuthExpired(Exception):
+    def __init__(self, action, resume_state):
+        super().__init__(
+            "YouTube Music authentication expired while "
+            f"{action}. Paste fresh signed-in request headers to resume "
+            "without repeating the song search."
+        )
+        self.resume_state = resume_state
 
 
 def parse_headers(headers_text):
@@ -240,6 +262,26 @@ def _similarity(left, right):
     return best_score
 
 
+def _contains_name(text, name):
+    text_variants = _text_variants(text)
+    name_variants = _text_variants(name)
+    return any(
+        name_variant in text_variant
+        for text_variant in text_variants
+        for name_variant in name_variants
+        if len(name_variant) >= 3
+    )
+
+
+def _version_tags(value):
+    normalized = unicodedata.normalize("NFKC", value or "").lower()
+    return {
+        tag
+        for tag, pattern in VERSION_PATTERNS.items()
+        if re.search(pattern, normalized)
+    }
+
+
 def _result_artists(result):
     artists = result.get("artists") or []
     if not artists and result.get("artist"):
@@ -261,13 +303,32 @@ def _score_result(track, result):
         for result_artist in result_artists:
             artist_score = max(artist_score, _similarity(source_artist, result_artist))
 
+    title_artist_score = max(
+        (
+            1 if _contains_name(result.get("title"), source_artist) else 0
+            for source_artist in source_artists
+        ),
+        default=0,
+    )
+    artist_evidence = max(artist_score, title_artist_score)
+
     album_score = 0
     if track.get("album") and result.get("album"):
         album = result["album"]
         album_name = album.get("name") if isinstance(album, dict) else str(album)
         album_score = _similarity(track["album"], album_name)
 
-    return (title_score * 0.55) + (artist_score * 0.4) + (album_score * 0.05)
+    score = (title_score * 0.55) + (artist_evidence * 0.4) + (album_score * 0.05)
+
+    if artist_evidence < 0.55:
+        score = min(score, MIN_MATCH_SCORE - 0.01)
+
+    source_versions = _version_tags(track.get("name"))
+    result_versions = _version_tags(result.get("title"))
+    if source_versions != result_versions:
+        score = min(score, MIN_MATCH_SCORE - 0.01)
+
+    return score
 
 
 def _best_search_result(track, results):
@@ -425,14 +486,15 @@ def _find_video_id_with_immediate_retries(ytmusic, track):
             time.sleep(YTMUSIC_IMMEDIATE_RETRY_COOLDOWN_SECONDS)
 
 
-def get_video_ids(ytmusic, tracks):
+def get_video_ids(ytmusic, tracks, progress_callback=None):
     video_ids = []
     missed_tracks = {
         "count": 0,
         "tracks": [],
     }
     temporary_error_tracks = []
-    for track in tracks:
+    total_tracks = len(tracks)
+    for processed_tracks, track in enumerate(tracks, start=1):
         search_string = _track_label(track)
         try:
             video_id, _score = _find_video_id_with_immediate_retries(ytmusic, track)
@@ -452,6 +514,18 @@ def get_video_ids(ytmusic, tracks):
             print(f"{search_string} not found on YouTube Music: {error}")
             missed_tracks["count"] += 1
             missed_tracks["tracks"].append(search_string)
+        finally:
+            if progress_callback:
+                progress_callback(
+                    len(video_ids),
+                    processed_tracks,
+                    total_tracks,
+                )
+            if processed_tracks == total_tracks or processed_tracks % 25 == 0:
+                print(
+                    f"YouTube Music search progress: {processed_tracks}/"
+                    f"{total_tracks} checked, {len(video_ids)} found"
+                )
 
     for retry_pass in range(1, YTMUSIC_FINAL_RETRY_PASSES + 1):
         if not temporary_error_tracks:
@@ -589,9 +663,10 @@ def _add_playlist_items_chunked(
     playlist_id,
     video_ids,
     progress_callback=None,
+    start_index=0,
 ):
     total = len(video_ids)
-    for start in range(0, total, YTMUSIC_PLAYLIST_ADD_CHUNK_SIZE):
+    for start in range(start_index, total, YTMUSIC_PLAYLIST_ADD_CHUNK_SIZE):
         chunk = video_ids[start:start + YTMUSIC_PLAYLIST_ADD_CHUNK_SIZE]
         end = start + len(chunk)
         expected_prefix = video_ids[:end]
@@ -671,7 +746,7 @@ def _add_playlist_items_chunked(
                 time.sleep(cooldown)
 
 
-def create_ytm_playlist(playlist_link, headers, progress_callback=None):
+def _setup_ytmusic(headers):
     auth_path = None
     try:
         formatted_headers = parse_headers(headers)
@@ -685,7 +760,50 @@ def create_ytm_playlist(playlist_link, headers, progress_callback=None):
         ytmusicapi.setup(filepath=auth_path, headers_raw=formatted_headers)
         ytmusic = YTMusic(auth_path)
     except Exception as error:
+        if auth_path:
+            Path(auth_path).unlink(missing_ok=True)
         _raise_youtube_error("setting up auth headers", error)
+    return ytmusic, auth_path
+
+
+def resume_ytm_playlist(headers, resume_state, progress_callback=None):
+    try:
+        ytmusic, auth_path = _setup_ytmusic(headers)
+    except Exception as error:
+        raise YouTubeAuthExpired("validating fresh headers", resume_state) from error
+    try:
+        _add_playlist_items_chunked(
+            ytmusic,
+            resume_state["playlist_id"],
+            resume_state["video_ids"],
+            progress_callback=progress_callback,
+            start_index=resume_state.get("items_added", 0),
+        )
+    except Exception as error:
+        if _is_youtube_auth_error(error):
+            raise YouTubeAuthExpired("adding songs to the playlist", resume_state)
+        _raise_youtube_error("adding songs to the playlist", error)
+    finally:
+        Path(auth_path).unlink(missing_ok=True)
+
+    return {
+        "missed_tracks": resume_state["missed_tracks"],
+        "cover_url": resume_state.get("cover_url"),
+        "playlist_name": resume_state["playlist_name"],
+        "found_tracks": len(resume_state["video_ids"]),
+        "source_tracks": resume_state.get("source_tracks"),
+    }
+
+
+def create_ytm_playlist(
+    playlist_link,
+    headers,
+    progress_callback=None,
+    search_progress_callback=None,
+    search_complete_callback=None,
+):
+    ytmusic, auth_path = _setup_ytmusic(headers)
+    resume_state = None
 
     try:
         tracks = get_all_tracks(playlist_link, "IT")
@@ -698,16 +816,45 @@ def create_ytm_playlist(playlist_link, headers, progress_callback=None):
         except Exception as error:
             _raise_youtube_error("creating the empty playlist", error)
 
-        video_ids, missed_tracks = get_video_ids(ytmusic, tracks)
+        video_ids, missed_tracks = get_video_ids(
+            ytmusic,
+            tracks,
+            progress_callback=search_progress_callback,
+        )
+        resume_state = {
+            "playlist_id": playlist_id,
+            "video_ids": video_ids,
+            "items_added": 0,
+            "missed_tracks": missed_tracks,
+            "cover_url": playlist_details.get("cover_url"),
+            "playlist_name": name,
+            "source_tracks": len(tracks),
+        }
+        print(
+            f"Matched {len(video_ids)}/{len(tracks)} Spotify tracks; "
+            f"{missed_tracks['count']} unmatched"
+        )
+        if search_complete_callback:
+            search_complete_callback(resume_state)
 
         try:
+            def track_progress(items_added, items_total, youtube_playlist_id):
+                resume_state["items_added"] = items_added
+                if progress_callback:
+                    progress_callback(items_added, items_total, youtube_playlist_id)
+
             _add_playlist_items_chunked(
                 ytmusic,
                 playlist_id,
                 video_ids,
-                progress_callback=progress_callback,
+                progress_callback=track_progress,
             )
         except Exception as error:
+            if _is_youtube_auth_error(error):
+                raise YouTubeAuthExpired(
+                    "adding songs to the playlist",
+                    resume_state,
+                )
             _raise_youtube_error("adding songs to the playlist", error)
     finally:
         if auth_path:
@@ -721,4 +868,6 @@ def create_ytm_playlist(playlist_link, headers, progress_callback=None):
         "missed_tracks": missed_tracks,
         "cover_url": playlist_details.get("cover_url"),
         "playlist_name": name,
+        "found_tracks": len(video_ids),
+        "source_tracks": len(tracks),
     }
