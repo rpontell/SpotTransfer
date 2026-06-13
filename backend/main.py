@@ -6,11 +6,8 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import urlparse
-
-import requests
 from dotenv import load_dotenv
-from flask import Flask, Response, request
+from flask import Flask, request
 from flask_cors import CORS
 
 from ytm import YouTubeAuthExpired, create_ytm_playlist, resume_ytm_playlist
@@ -224,9 +221,7 @@ def _run_create_job(job_id, playlist_link, auth_headers):
                 "message": "Playlist created successfully!",
                 "playlist_link": playlist_link,
                 "missed_tracks": result["missed_tracks"],
-                "cover_url": result.get("cover_url"),
                 "playlist_name": result.get("playlist_name"),
-                "has_cover": bool(result.get("cover_url")),
                 "found_tracks": result.get("found_tracks"),
                 "source_tracks": result.get("source_tracks"),
                 **progress,
@@ -319,9 +314,7 @@ def _run_resume_job(job_id, playlist_link, auth_headers):
                 "message": "Playlist created successfully!",
                 "playlist_link": playlist_link,
                 "missed_tracks": result["missed_tracks"],
-                "cover_url": result.get("cover_url"),
                 "playlist_name": result.get("playlist_name"),
-                "has_cover": bool(result.get("cover_url")),
                 "found_tracks": result.get("found_tracks"),
                 "source_tracks": result.get("source_tracks"),
                 "items_added": len(state["video_ids"]),
@@ -444,57 +437,6 @@ def resume_playlist(job_id):
         auth_headers,
     )
     return {"message": "Playlist write resumed", "job_id": job_id}, 202
-
-
-def _safe_cover_filename(playlist_name, content_type):
-    safe_name = "".join(
-        char
-        if char.isascii() and (char.isalnum() or char in {" ", "-", "_"})
-        else "_"
-        for char in (playlist_name or "spotify-playlist")
-    ).strip() or "spotify-playlist"
-    extension = ".png" if content_type == "image/png" else ".jpg"
-    return f'{safe_name[:100]}{extension}'
-
-
-@app.route("/jobs/<job_id>/cover", methods=["GET"])
-def download_playlist_cover(job_id):
-    job = _read_job(job_id)
-    if not job or job.get("status") != "complete":
-        return {"message": "Completed job not found"}, 404
-
-    cover_url = job.get("cover_url")
-    parsed_url = urlparse(cover_url or "")
-    hostname = (parsed_url.hostname or "").lower()
-    if (
-        parsed_url.scheme != "https"
-        or not hostname
-        or not (
-            hostname == "scdn.co"
-            or hostname.endswith(".scdn.co")
-            or hostname == "spotifycdn.com"
-            or hostname.endswith(".spotifycdn.com")
-        )
-    ):
-        return {"message": "Spotify playlist cover is unavailable"}, 404
-
-    try:
-        cover_response = requests.get(cover_url, timeout=30)
-        cover_response.raise_for_status()
-    except requests.RequestException:
-        app.logger.exception("Failed to download cover for job %s", job_id)
-        return {"message": "Failed to download Spotify playlist cover"}, 502
-
-    content_type = cover_response.headers.get("Content-Type", "").split(";", 1)[0]
-    if content_type not in {"image/jpeg", "image/png"}:
-        return {"message": "Spotify returned an unsupported cover format"}, 502
-
-    filename = _safe_cover_filename(job.get("playlist_name"), content_type)
-    return Response(
-        cover_response.content,
-        mimetype=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
 
 
 @app.route("/", methods=["GET"])

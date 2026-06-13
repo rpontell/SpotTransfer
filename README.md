@@ -2,8 +2,7 @@
 
 SpotTransfer copies a Spotify playlist into a new private YouTube Music
 playlist. It searches for each track, compares title, artist, and album,
-handles non-Latin writing systems, reports unmatched tracks, and lets users
-download the Spotify cover for manual upload to YouTube Music.
+handles non-Latin writing systems and reports unmatched tracks.
 
 This guide covers two installation methods:
 
@@ -477,8 +476,6 @@ of YouTube Music, you may need to copy fresh headers.
 3. Select **Clone Playlist**.
 4. Wait. Large playlists and retries may take several minutes.
 5. Review any unmatched tracks.
-6. Use **Download Spotify cover** to save the cover image.
-7. Upload the cover manually to the YouTube/YouTube Music playlist.
 
 ## Local Installation
 
@@ -767,7 +764,6 @@ Server credentials:
 Output:
 - private YouTube Music playlist
 - missed_tracks list
-- Spotify cover download when available
 ```
 
 ### Ports and URLs

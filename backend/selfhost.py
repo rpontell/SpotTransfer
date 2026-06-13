@@ -20,8 +20,6 @@ def main():
     result = create_ytm_playlist(args.playlist_url, headers)
     print(f"Playlist created: {result['playlist_name']}")
     print(f"Missed tracks: {result['missed_tracks']['count']}")
-    if result.get("cover_url"):
-        print(f"Spotify cover: {result['cover_url']}")
 
 
 if __name__ == "__main__":

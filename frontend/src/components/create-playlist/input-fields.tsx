@@ -29,7 +29,6 @@ export default function InputFields() {
     const [connectionError, setConnectionError] = useState(false);
     const [errorMessage, setErrorMessage] = useState<React.ReactNode>("");
     const [cloneError, setCloneError] = useState(false);
-    const [coverDownloadUrl, setCoverDownloadUrl] = useState("");
     const [cloneProgress, setCloneProgress] = useState("Starting clone...");
     const [foundTracks, setFoundTracks] = useState<number | null>(null);
     const [sourceTracks, setSourceTracks] = useState<number | null>(null);
@@ -95,11 +94,6 @@ export default function InputFields() {
             }
 
             if (statusData.status === "complete") {
-                setCoverDownloadUrl(
-                    statusData.has_cover
-                        ? `${import.meta.env.VITE_API_URL}/jobs/${jobId}/cover`
-                        : ""
-                );
                 if (statusData.missed_tracks?.count > 0) {
                     setMissedTracks(statusData.missed_tracks);
                     setMissedTracksDialog(true);
@@ -408,16 +402,6 @@ export default function InputFields() {
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
                                     <div className="flex items-center justify-between w-full">
-                                        {coverDownloadUrl && (
-                                            <Button asChild variant="outline">
-                                                <a
-                                                    href={coverDownloadUrl}
-                                                    download
-                                                >
-                                                    Download Spotify cover
-                                                </a>
-                                            </Button>
-                                        )}
                                         <Button>
                                             <a
                                                 className="w-full flex items-center gap-2"

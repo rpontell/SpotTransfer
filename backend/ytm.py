@@ -71,7 +71,10 @@ JAPANESE_CHARACTER_PATTERN = re.compile(
     "[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff]"
 )
 VERSION_PATTERNS = {
-    "remix": r"\b(remix|mix)\b",
+    "remix": (
+        r"(?:\b(?:re\s*mix(?:ed)?|mix|mash[ -]?up|bootleg|rework|flip)\b|"
+        r"\bremix(?=\d)|(?<=\d)remix\b)"
+    ),
     "sped_up": r"\b(sped|speed)\s*up\b",
     "slowed": r"\b(slowed|slow)\b",
     "extended": r"\bextended\b",
@@ -81,6 +84,9 @@ VERSION_PATTERNS = {
     "instrumental": r"\binstrumental\b",
     "karaoke": r"\bkaraoke\b",
     "edit": r"\bedit\b",
+    "vip": r"\bvip\b",
+    "remaster": r"\bremaster(?:ed)?\b",
+    "reverb": r"\breverb(?:ed)?\b",
 }
 
 
@@ -291,6 +297,16 @@ def _version_tags(value):
     }
 
 
+def _result_version_text(result):
+    album = result.get("album")
+    album_name = album.get("name") if isinstance(album, dict) else album
+    return " ".join(
+        value
+        for value in [result.get("title"), album_name]
+        if isinstance(value, str) and value
+    )
+
+
 def _result_artists(result):
     artists = result.get("artists") or []
     if not artists and result.get("artist"):
@@ -333,7 +349,7 @@ def _score_result(track, result):
         score = min(score, MIN_MATCH_SCORE - 0.01)
 
     source_versions = _version_tags(track.get("name"))
-    result_versions = _version_tags(result.get("title"))
+    result_versions = _version_tags(_result_version_text(result))
     if source_versions != result_versions:
         score = min(score, MIN_MATCH_SCORE - 0.01)
 
@@ -880,7 +896,6 @@ def resume_ytm_playlist(headers, resume_state, progress_callback=None):
 
     return {
         "missed_tracks": resume_state["missed_tracks"],
-        "cover_url": resume_state.get("cover_url"),
         "playlist_name": resume_state["playlist_name"],
         "found_tracks": len(resume_state["video_ids"]),
         "source_tracks": resume_state.get("source_tracks"),
@@ -918,7 +933,6 @@ def create_ytm_playlist(
             "video_ids": video_ids,
             "items_added": 0,
             "missed_tracks": missed_tracks,
-            "cover_url": playlist_details.get("cover_url"),
             "playlist_name": name,
             "source_tracks": len(tracks),
         }
@@ -958,7 +972,6 @@ def create_ytm_playlist(
     print(f"Created YouTube Music playlist: {name} with {len(video_ids)} songs")
     return {
         "missed_tracks": missed_tracks,
-        "cover_url": playlist_details.get("cover_url"),
         "playlist_name": name,
         "found_tracks": len(video_ids),
         "source_tracks": len(tracks),

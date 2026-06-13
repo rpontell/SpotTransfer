@@ -227,11 +227,8 @@ def get_playlist_details(link):
         {"Authorization": f"Bearer {access_token}"},
         "Spotify playlist endpoint",
     )
-    images = data.get("images") or []
-    cover_url = images[0].get("url") if images else None
     return {
         "name": data["name"],
-        "cover_url": cover_url,
     }
 
 

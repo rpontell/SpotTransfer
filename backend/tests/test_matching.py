@@ -45,6 +45,34 @@ class MatchingTests(unittest.TestCase):
 
         self.assertLess(_score_result(self.track, result), MIN_MATCH_SCORE)
 
+    def test_rejects_remix_marker_in_album_metadata(self):
+        result = {
+            "title": "Endless Seeker",
+            "artists": [{"name": "Rute"}],
+            "album": {"name": "Endless Seeker Remixed"},
+        }
+
+        self.assertLess(_score_result(self.track, result), MIN_MATCH_SCORE)
+
+    def test_rejects_compact_and_alternative_remix_labels(self):
+        for title in [
+            "Endless Seeker REMIX2026",
+            "Endless Seeker Rework",
+            "Endless Seeker Bootleg",
+            "Endless Seeker Mash-Up",
+            "Endless Seeker VIP",
+        ]:
+            with self.subTest(title=title):
+                result = {
+                    "title": title,
+                    "artists": [{"name": "Rute"}],
+                    "album": {"name": "Endless Seeker"},
+                }
+                self.assertLess(
+                    _score_result(self.track, result),
+                    MIN_MATCH_SCORE,
+                )
+
     def test_accepts_matching_original(self):
         result = {
             "title": "Endless Seeker",
