@@ -29,6 +29,7 @@ export default function InputFields() {
     const [connectionError, setConnectionError] = useState(false);
     const [errorMessage, setErrorMessage] = useState<React.ReactNode>("");
     const [cloneError, setCloneError] = useState(false);
+    const [coverDownloadUrl, setCoverDownloadUrl] = useState("");
     const [cloneErrorMessage, setCloneErrorMessage] =
         useState<React.ReactNode>("");
     const [missedTracksDialog, setMissedTracksDialog] = useState(false);
@@ -59,6 +60,9 @@ export default function InputFields() {
             auth_headers: authHeaders,
         };
 
+        const sleep = (ms: number) =>
+            new Promise((resolve) => setTimeout(resolve, ms));
+
         try {
             setdialogOpen(true);
             const res = await fetch(`${import.meta.env.VITE_API_URL}/create`, {
@@ -70,35 +74,68 @@ export default function InputFields() {
             });
             const data = await res.json();
 
-            if (res.ok) {
-                if (data.missed_tracks.count > 0) {
-                    setMissedTracks(data.missed_tracks);
-                    setMissedTracksDialog(true);
+            if (!res.ok) {
+                setCloneError(true);
+                setCloneErrorMessage(
+                    data.message || "Failed to start playlist clone"
+                );
+                return;
+            }
+
+            const jobId = data.job_id;
+            if (!jobId) {
+                setCloneError(true);
+                setCloneErrorMessage("Server did not return a clone job id");
+                return;
+            }
+
+            while (true) {
+                await sleep(3000);
+                const statusRes = await fetch(
+                    `${import.meta.env.VITE_API_URL}/jobs/${jobId}`,
+                    {
+                        method: "GET",
+                        headers: { "Content-Type": "application/json" },
+                    }
+                );
+                const statusData = await statusRes.json();
+
+                if (!statusRes.ok) {
+                    setCloneError(true);
+                    setCloneErrorMessage(
+                        statusData.message || "Failed to get clone job status"
+                    );
+                    return;
                 }
-                setStarPrompt(true);
-            } else if (res.status === 500) {
-                setCloneError(true);
-                setCloneErrorMessage(
-                    <>
-                        Server timeout while cloning playlist. Please try again
-                        or{" "}
-                        <a
-                            href="https://github.com/Pushan2005/SpotTransfer/issues/new/choose"
-                            className="text-blue-500 hover:underline"
-                        >
-                            report this issue
-                        </a>
-                    </>
-                );
-            } else {
-                setCloneError(true);
-                setCloneErrorMessage(
-                    data.message || "Failed to clone playlist"
-                );
+
+                if (statusData.status === "complete") {
+                    setCoverDownloadUrl(
+                        statusData.has_cover
+                            ? `${import.meta.env.VITE_API_URL}/jobs/${jobId}/cover`
+                            : ""
+                    );
+                    if (statusData.missed_tracks?.count > 0) {
+                        setMissedTracks(statusData.missed_tracks);
+                        setMissedTracksDialog(true);
+                    }
+                    setStarPrompt(true);
+                    return;
+                }
+
+                if (statusData.status === "failed") {
+                    setCloneError(true);
+                    setCloneErrorMessage(
+                        statusData.message ||
+                            "Server error while cloning playlist"
+                    );
+                    return;
+                }
             }
         } catch {
             setCloneError(true);
-            setCloneErrorMessage("Network error while cloning playlist");
+            setCloneErrorMessage(
+                "Network error while checking playlist clone status"
+            );
         } finally {
             setdialogOpen(false);
         }
@@ -220,7 +257,8 @@ export default function InputFields() {
                             <div className="flex items-center gap-2">
                                 <FaExclamationCircle />
                                 <p className="text-sm text-gray-500">
-                                    Make sure the playlist is public
+                                    Make sure the Spotify OAuth account owns or
+                                    collaborates on the playlist
                                 </p>
                             </div>
                             <div className="flex items-center gap-2 mt-2">
@@ -308,6 +346,16 @@ export default function InputFields() {
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
                                     <div className="flex items-center justify-between w-full">
+                                        {coverDownloadUrl && (
+                                            <Button asChild variant="outline">
+                                                <a
+                                                    href={coverDownloadUrl}
+                                                    download
+                                                >
+                                                    Download Spotify cover
+                                                </a>
+                                            </Button>
+                                        )}
                                         <Button>
                                             <a
                                                 className="w-full flex items-center gap-2"

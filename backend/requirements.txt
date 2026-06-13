@@ -1,4 +1,5 @@
 blinker==1.9.0
+anyascii==0.3.3
 certifi==2024.12.14
 charset-normalizer==3.4.0
 click==8.1.8
@@ -10,6 +11,7 @@ itsdangerous==2.2.0
 Jinja2==3.1.5
 MarkupSafe==3.0.2
 packaging==24.2
+pykakasi
 python-dotenv==1.0.1
 requests==2.32.3
 urllib3==2.2.3
