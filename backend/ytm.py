@@ -293,6 +293,40 @@ def _similarity(left, right):
     return best_score
 
 
+def _normalize_title_text(value):
+    value = unicodedata.normalize("NFKC", value or "").lower()
+    value = re.sub(r"[()[\]{}]", " ", value)
+    value = re.sub(r"\b(feat|ft|featuring|prod)\b\.?", " ", value)
+    value = "".join(char if char.isalnum() else " " for char in value)
+    return " ".join(value.split())
+
+
+def _title_similarity(left, right):
+    score = _similarity(left, right)
+    for left_variant in _transliteration_variants(left):
+        normalized_left = _normalize_title_text(left_variant)
+        if not normalized_left:
+            continue
+        for right_variant in _transliteration_variants(right):
+            normalized_right = _normalize_title_text(right_variant)
+            if not normalized_right:
+                continue
+            if normalized_left == normalized_right:
+                return 1
+            if normalized_left in normalized_right or normalized_right in normalized_left:
+                score = max(score, 0.9)
+            else:
+                score = max(
+                    score,
+                    SequenceMatcher(
+                        None,
+                        normalized_left,
+                        normalized_right,
+                    ).ratio(),
+                )
+    return score
+
+
 def _contains_name(text, name):
     text_variants = _text_variants(text)
     name_variants = _text_variants(name)
@@ -345,7 +379,7 @@ def _result_artists(result):
 
 
 def _score_result(track, result):
-    title_score = _similarity(track["name"], result.get("title"))
+    title_score = _title_similarity(track["name"], result.get("title"))
     source_artists = track.get("artists") or []
     result_artists = _result_artists(result)
 

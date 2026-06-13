@@ -137,6 +137,51 @@ class MatchingTests(unittest.TestCase):
                     MIN_MATCH_SCORE,
                 )
 
+    def test_accepts_same_version_when_youtube_uses_parentheses(self):
+        cases = [
+            (
+                "Penso a te 2015 - Matt Joe Remix",
+                "Penso a te 2015 (Matt Joe Remix)",
+                "DJ Matrix",
+            ),
+            (
+                "Red Devils (feat. Skioffi) - Gabry Ponte Remix",
+                "Red Devils (feat. Skioffi) (Gabry Ponte Remix)",
+                "DJ Matrix",
+            ),
+            (
+                "No Control - Extended Mix",
+                "No Control (Extended Mix)",
+                "Manuel",
+            ),
+            (
+                "Give It To Me - Remix",
+                "Give It To Me (Remix)",
+                "ronixd",
+            ),
+            (
+                "Bury the Light - Game Edit",
+                "Bury the Light (Game Edit)",
+                "Casey Edwards",
+            ),
+        ]
+
+        for spotify_title, youtube_title, artist in cases:
+            with self.subTest(title=spotify_title):
+                track = {
+                    "name": spotify_title,
+                    "artists": [artist],
+                    "album": spotify_title,
+                }
+                result = {
+                    "title": youtube_title,
+                    "artists": [{"name": artist}],
+                }
+                self.assertGreaterEqual(
+                    _score_result(track, result),
+                    MIN_MATCH_SCORE,
+                )
+
     def test_accepts_matching_original(self):
         result = {
             "title": "Endless Seeker",
