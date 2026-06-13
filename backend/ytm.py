@@ -272,6 +272,23 @@ def _text_variants(value):
     return variants
 
 
+def _has_non_latin_letters(value):
+    return any(
+        char.isalpha() and not char.isascii()
+        for char in unicodedata.normalize("NFKC", value or "")
+    )
+
+
+def _native_text(value):
+    return _normalize_text(value)
+
+
+def _romanized_text(value):
+    variants = _transliteration_variants(value)
+    candidate = variants[-1] if variants else value
+    return _normalize_text(candidate)
+
+
 def _similarity(left, right):
     left_variants = _text_variants(left)
     right_variants = _text_variants(right)
@@ -302,6 +319,19 @@ def _normalize_title_text(value):
 
 
 def _title_similarity(left, right):
+    left_is_non_latin = _has_non_latin_letters(left)
+    right_is_non_latin = _has_non_latin_letters(right)
+    if left_is_non_latin and right_is_non_latin:
+        normalized_left = _normalize_title_text(left)
+        normalized_right = _normalize_title_text(right)
+        if normalized_left == normalized_right:
+            return 1
+        return SequenceMatcher(
+            None,
+            normalized_left,
+            normalized_right,
+        ).ratio()
+
     score = _similarity(left, right)
     for left_variant in _transliteration_variants(left):
         normalized_left = _normalize_title_text(left_variant)
@@ -328,6 +358,28 @@ def _title_similarity(left, right):
 
 
 def _artist_similarity(left, right):
+    left_is_non_latin = _has_non_latin_letters(left)
+    right_is_non_latin = _has_non_latin_letters(right)
+
+    if left_is_non_latin and right_is_non_latin:
+        return 1 if _native_text(left) == _native_text(right) else 0
+
+    if left_is_non_latin != right_is_non_latin:
+        romanized_left = _romanized_text(left)
+        romanized_right = _romanized_text(right)
+        if not romanized_left or not romanized_right:
+            return 0
+        if romanized_left == romanized_right:
+            return 1
+        if romanized_left in romanized_right or romanized_right in romanized_left:
+            return 0.9
+        fuzzy_score = SequenceMatcher(
+            None,
+            romanized_left,
+            romanized_right,
+        ).ratio()
+        return fuzzy_score if fuzzy_score >= 0.93 else 0
+
     best_score = 0
     for left_variant in _text_variants(left):
         for right_variant in _text_variants(right):
@@ -398,7 +450,15 @@ def _result_artists(result):
 
 
 def _score_result_details(track, result):
-    title_score = _title_similarity(track["name"], result.get("title"))
+    source_title = track["name"]
+    result_title = result.get("title")
+    title_score = _title_similarity(source_title, result_title)
+    native_title_mismatch = (
+        _has_non_latin_letters(source_title)
+        and _has_non_latin_letters(result_title)
+        and _normalize_title_text(source_title)
+        != _normalize_title_text(result_title)
+    )
     source_artists = track.get("artists") or []
     result_artists = _result_artists(result)
 
@@ -453,6 +513,10 @@ def _score_result_details(track, result):
         rejection_reasons.append("version mismatch")
         score = min(score, MIN_MATCH_SCORE - 0.01)
 
+    if native_title_mismatch:
+        rejection_reasons.append("non-Latin title mismatch")
+        score = min(score, MIN_MATCH_SCORE - 0.01)
+
     return {
         "score": score,
         "title_score": title_score,
@@ -461,6 +525,7 @@ def _score_result_details(track, result):
         "source_versions": source_versions,
         "result_versions": result_versions,
         "versioned_title_fallback": versioned_title_fallback,
+        "native_title_mismatch": native_title_mismatch,
         "rejection_reasons": rejection_reasons,
     }
 

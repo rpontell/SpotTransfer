@@ -1,6 +1,6 @@
 import unittest
 
-from ytm import MIN_MATCH_SCORE, _score_result
+from ytm import MIN_MATCH_SCORE, _artist_similarity, _score_result
 
 
 class MatchingTests(unittest.TestCase):
@@ -215,6 +215,40 @@ class MatchingTests(unittest.TestCase):
         result = {
             "title": "Common Song Name",
             "artists": [{"name": "Wrong Artist"}],
+        }
+
+        self.assertLess(_score_result(track, result), MIN_MATCH_SCORE)
+
+    def test_rejects_similar_but_different_japanese_artist(self):
+        track = {
+            "name": "花冷え。",
+            "artists": ["佐藤"],
+            "album": "花冷え。",
+        }
+        result = {
+            "title": "花冷え。",
+            "artists": [{"name": "佐東"}],
+        }
+
+        self.assertEqual(_artist_similarity("佐藤", "佐東"), 0)
+        self.assertLess(_score_result(track, result), MIN_MATCH_SCORE)
+
+    def test_accepts_exact_japanese_artist_and_latin_romanization(self):
+        self.assertEqual(_artist_similarity("花冷え。", "花冷え。"), 1)
+        self.assertGreaterEqual(
+            _artist_similarity("花冷え。", "Hanabie."),
+            0.9,
+        )
+
+    def test_rejects_similar_but_different_japanese_title(self):
+        track = {
+            "name": "恋愛裁判",
+            "artists": ["初音ミク"],
+            "album": "恋愛裁判",
+        }
+        result = {
+            "title": "恋愛裁判官",
+            "artists": [{"name": "初音ミク"}],
         }
 
         self.assertLess(_score_result(track, result), MIN_MATCH_SCORE)
