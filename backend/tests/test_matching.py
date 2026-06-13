@@ -182,6 +182,43 @@ class MatchingTests(unittest.TestCase):
                     MIN_MATCH_SCORE,
                 )
 
+    def test_accepts_specific_version_when_youtube_reports_uploader(self):
+        cases = [
+            ("Red Devils (feat. Skioffi) - Gabry Ponte Remix", "DJ Matrix"),
+            ("Give It To Me - Remix", "ronixd"),
+            ("Lalalalala (Hardstyle) - High Level Remix", "Hardstyle Germany"),
+            ("Bury the Light - Game Edit", "Casey Edwards"),
+        ]
+
+        for title, artist in cases:
+            with self.subTest(title=title):
+                track = {
+                    "name": title,
+                    "artists": [artist],
+                    "album": title,
+                }
+                result = {
+                    "title": title,
+                    "artists": [{"name": "Uploader Channel"}],
+                }
+                self.assertGreaterEqual(
+                    _score_result(track, result),
+                    MIN_MATCH_SCORE,
+                )
+
+    def test_still_rejects_unversioned_exact_title_with_wrong_artist(self):
+        track = {
+            "name": "Common Song Name",
+            "artists": ["Correct Artist"],
+            "album": "Common Song Name",
+        }
+        result = {
+            "title": "Common Song Name",
+            "artists": [{"name": "Wrong Artist"}],
+        }
+
+        self.assertLess(_score_result(track, result), MIN_MATCH_SCORE)
+
     def test_accepts_matching_original(self):
         result = {
             "title": "Endless Seeker",

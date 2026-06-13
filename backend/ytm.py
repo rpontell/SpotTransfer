@@ -327,6 +327,25 @@ def _title_similarity(left, right):
     return score
 
 
+def _artist_similarity(left, right):
+    best_score = 0
+    for left_variant in _text_variants(left):
+        for right_variant in _text_variants(right):
+            if left_variant == right_variant:
+                return 1
+            if left_variant in right_variant or right_variant in left_variant:
+                best_score = max(best_score, 0.9)
+                continue
+            fuzzy_score = SequenceMatcher(
+                None,
+                left_variant,
+                right_variant,
+            ).ratio()
+            if fuzzy_score >= 0.8:
+                best_score = max(best_score, fuzzy_score)
+    return best_score
+
+
 def _contains_name(text, name):
     text_variants = _text_variants(text)
     name_variants = _text_variants(name)
@@ -378,7 +397,7 @@ def _result_artists(result):
     ]
 
 
-def _score_result(track, result):
+def _score_result_details(track, result):
     title_score = _title_similarity(track["name"], result.get("title"))
     source_artists = track.get("artists") or []
     result_artists = _result_artists(result)
@@ -386,7 +405,10 @@ def _score_result(track, result):
     artist_score = 0
     for source_artist in source_artists:
         for result_artist in result_artists:
-            artist_score = max(artist_score, _similarity(source_artist, result_artist))
+            artist_score = max(
+                artist_score,
+                _artist_similarity(source_artist, result_artist),
+            )
 
     title_artist_score = max(
         (
@@ -403,17 +425,48 @@ def _score_result(track, result):
         album_name = album.get("name") if isinstance(album, dict) else str(album)
         album_score = _similarity(track["album"], album_name)
 
-    score = (title_score * 0.55) + (artist_evidence * 0.4) + (album_score * 0.05)
-
-    if artist_evidence < 0.55:
-        score = min(score, MIN_MATCH_SCORE - 0.01)
-
     source_versions = _version_tags(track.get("name"))
     result_versions = _version_tags(_result_version_text(result))
-    if source_versions != result_versions:
+    versions_match = source_versions == result_versions
+
+    versioned_title_fallback = (
+        bool(source_versions)
+        and versions_match
+        and title_score >= 0.9
+    )
+    effective_artist_evidence = artist_evidence
+    if versioned_title_fallback:
+        effective_artist_evidence = max(effective_artist_evidence, 0.55)
+
+    score = (
+        (title_score * 0.55)
+        + (effective_artist_evidence * 0.4)
+        + (album_score * 0.05)
+    )
+
+    rejection_reasons = []
+    if artist_evidence < 0.55 and not versioned_title_fallback:
+        rejection_reasons.append("artist mismatch")
         score = min(score, MIN_MATCH_SCORE - 0.01)
 
-    return score
+    if not versions_match:
+        rejection_reasons.append("version mismatch")
+        score = min(score, MIN_MATCH_SCORE - 0.01)
+
+    return {
+        "score": score,
+        "title_score": title_score,
+        "artist_score": artist_evidence,
+        "album_score": album_score,
+        "source_versions": source_versions,
+        "result_versions": result_versions,
+        "versioned_title_fallback": versioned_title_fallback,
+        "rejection_reasons": rejection_reasons,
+    }
+
+
+def _score_result(track, result):
+    return _score_result_details(track, result)["score"]
 
 
 def _best_search_result(track, results):
@@ -428,6 +481,22 @@ def _best_search_result(track, results):
     scored = [(_score_result(track, result), result) for result in candidates]
     scored.sort(key=lambda item: item[0], reverse=True)
     return scored[0][1], scored[0][0]
+
+
+def _format_match_diagnostics(track, result):
+    if not result:
+        return "no candidates returned"
+    details = _score_result_details(track, result)
+    return (
+        f"candidate='{result.get('title')}', "
+        f"artists={_result_artists(result)}, "
+        f"title={details['title_score']:.2f}, "
+        f"artist={details['artist_score']:.2f}, "
+        f"album={details['album_score']:.2f}, "
+        f"source_versions={sorted(details['source_versions'])}, "
+        f"result_versions={sorted(details['result_versions'])}, "
+        f"reasons={details['rejection_reasons']}"
+    )
 
 
 def _is_transient_youtube_error(error):
@@ -630,7 +699,11 @@ def _find_video_id_for_track(ytmusic, track):
             if best_result and score >= MIN_MATCH_SCORE:
                 return best_result["videoId"], score
 
-    raise Exception(f"No confident YouTube Music match. Best score: {score:.2f}")
+    diagnostics = _format_match_diagnostics(track, best_result)
+    raise Exception(
+        f"No confident YouTube Music match. Best score: {score:.2f}; "
+        f"{diagnostics}"
+    )
 
 
 def _find_video_id_with_immediate_retries(ytmusic, track):
