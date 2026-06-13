@@ -87,6 +87,7 @@ VERSION_PATTERNS = {
     "vip": r"\bvip\b",
     "remaster": r"\bremaster(?:ed)?\b",
     "reverb": r"\breverb(?:ed)?\b",
+    "acapella": r"\b(?:a\s*capp?ella|acapella|vocals?\s*only)\b",
 }
 
 

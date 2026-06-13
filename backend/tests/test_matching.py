@@ -73,6 +73,23 @@ class MatchingTests(unittest.TestCase):
                     MIN_MATCH_SCORE,
                 )
 
+    def test_rejects_acapella_versions_for_original_track(self):
+        for title in [
+            "Endless Seeker Acapella",
+            "Endless Seeker A Cappella",
+            "Endless Seeker Vocals Only",
+        ]:
+            with self.subTest(title=title):
+                result = {
+                    "title": title,
+                    "artists": [{"name": "Rute"}],
+                    "album": {"name": "Endless Seeker"},
+                }
+                self.assertLess(
+                    _score_result(self.track, result),
+                    MIN_MATCH_SCORE,
+                )
+
     def test_accepts_matching_original(self):
         result = {
             "title": "Endless Seeker",
