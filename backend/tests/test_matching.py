@@ -90,6 +90,53 @@ class MatchingTests(unittest.TestCase):
                     MIN_MATCH_SCORE,
                 )
 
+    def test_rejects_common_alternative_arrangements(self):
+        for title in [
+            "Endless Seeker Orchestral Version",
+            "Endless Seeker Symphonic",
+            "Endless Seeker Acoustic",
+            "Endless Seeker Unplugged",
+            "Endless Seeker Piano Version",
+            "Endless Seeker String Quartet",
+            "Endless Seeker Demo",
+            "Endless Seeker Alternate Take",
+            "Endless Seeker Dub Version",
+            "Endless Seeker Lo-Fi Version",
+            "Endless Seeker 8D Audio",
+            "Endless Seeker Bass Boosted",
+            "Endless Seeker Clean Version",
+            "Endless Seeker Metal Version",
+            "Endless Seeker TV Size",
+        ]:
+            with self.subTest(title=title):
+                result = {
+                    "title": title,
+                    "artists": [{"name": "Rute"}],
+                    "album": {"name": "Endless Seeker"},
+                }
+                self.assertLess(
+                    _score_result(self.track, result),
+                    MIN_MATCH_SCORE,
+                )
+
+    def test_accepts_normal_release_labels(self):
+        for title in [
+            "Endless Seeker (Original Mix)",
+            "Endless Seeker (Album Version)",
+            "Endless Seeker Official Audio",
+            "Endless Seeker Lyrics",
+        ]:
+            with self.subTest(title=title):
+                result = {
+                    "title": title,
+                    "artists": [{"name": "Rute"}],
+                    "album": {"name": "Endless Seeker"},
+                }
+                self.assertGreaterEqual(
+                    _score_result(self.track, result),
+                    MIN_MATCH_SCORE,
+                )
+
     def test_accepts_matching_original(self):
         result = {
             "title": "Endless Seeker",

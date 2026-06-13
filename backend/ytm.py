@@ -88,6 +88,21 @@ VERSION_PATTERNS = {
     "remaster": r"\bremaster(?:ed)?\b",
     "reverb": r"\breverb(?:ed)?\b",
     "acapella": r"\b(?:a\s*capp?ella|acapella|vocals?\s*only)\b",
+    "orchestral": r"\b(?:orchestral|orchestra|symphonic)\b",
+    "acoustic": r"\b(?:acoustic|unplugged)\b",
+    "piano": r"\b(?:piano|solo\s*piano)\s*(?:version|arrangement|cover)?\b",
+    "strings": r"\b(?:strings?|string\s*quartet)\s*(?:version|arrangement)?\b",
+    "demo": r"\b(?:demo|workprint|rough\s*mix)\b",
+    "alternate": r"\b(?:alternate|alternative|alt\.?|different)\s*(?:version|take|mix)?\b",
+    "dub": r"\b(?:dub|dubbed)\s*(?:version|mix)?\b",
+    "lofi": r"\b(?:lo[ -]?fi|chill(?:ed)?|chillout)\s*(?:version|mix)?\b",
+    "audio_effect": r"\b(?:8d|3d|spatial)\s*audio\b|\bbass\s*boosted\b",
+    "censored": r"\b(?:clean|censored|radio\s*safe)\s*(?:version|edit)?\b",
+    "arrangement": (
+        r"\b(?:rock|metal|jazz|music\s*box|synthwave|chiptune)\s*"
+        r"(?:version|arrangement|cover)\b"
+    ),
+    "shortened": r"\b(?:short|cut|tv\s*size|game\s*size)\s*(?:version|edit)?\b",
 }
 
 
@@ -291,6 +306,16 @@ def _contains_name(text, name):
 
 def _version_tags(value):
     normalized = unicodedata.normalize("NFKC", value or "").lower()
+    normalized = re.sub(
+        r"\b(?:original|album|standard)\s+(?:mix|version)\b",
+        " ",
+        normalized,
+    )
+    normalized = re.sub(
+        r"\b(?:official\s+(?:audio|video)|lyrics?|visuali[sz]er)\b",
+        " ",
+        normalized,
+    )
     return {
         tag
         for tag, pattern in VERSION_PATTERNS.items()
