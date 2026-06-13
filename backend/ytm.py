@@ -308,6 +308,10 @@ def _is_ytmusic_parser_error(error):
     )
 
 
+def _is_retryable_youtube_error(error):
+    return _is_transient_youtube_error(error) or _is_ytmusic_parser_error(error)
+
+
 def _ytmusic_search(ytmusic, query, filter_name):
     last_error = None
     for attempt in range(YTMUSIC_SEARCH_RETRIES):
@@ -552,6 +556,23 @@ def _playlist_video_ids(ytmusic, playlist_id):
     ]
 
 
+def _reconcile_playlist_prefix(ytmusic, playlist_id, expected_video_ids):
+    try:
+        actual_video_ids = _playlist_video_ids(ytmusic, playlist_id)
+    except Exception as error:
+        if _is_youtube_auth_error(error):
+            raise
+        if _is_retryable_youtube_error(error):
+            print(
+                "YouTube Music could not expose the newly created playlist "
+                f"for reconciliation yet: {error}"
+            )
+            return None
+        raise
+
+    return _missing_expected_video_ids(expected_video_ids, actual_video_ids)
+
+
 def _missing_expected_video_ids(expected_video_ids, actual_video_ids):
     actual_counts = Counter(actual_video_ids)
     missing = []
@@ -574,32 +595,55 @@ def _add_playlist_items_chunked(
         chunk = video_ids[start:start + YTMUSIC_PLAYLIST_ADD_CHUNK_SIZE]
         end = start + len(chunk)
         expected_prefix = video_ids[:end]
+        pending_video_ids = chunk
+        needs_reconciliation = False
 
         for attempt in range(YTMUSIC_PLAYLIST_ADD_RETRIES + 1):
             try:
-                existing_video_ids = _playlist_video_ids(ytmusic, playlist_id)
-                missing_prefix = _missing_expected_video_ids(
-                    expected_prefix,
-                    existing_video_ids,
-                )
-                chunk_missing = missing_prefix[-len(chunk):]
-
-                if not chunk_missing:
-                    print(
-                        f"YouTube Music playlist items 1-{end}/{total} "
-                        "already confirmed"
-                    )
-                else:
-                    print(
-                        f"Adding YouTube Music playlist items "
-                        f"{end - len(chunk_missing) + 1}-{end}/{total} "
-                        f"(attempt {attempt + 1}/{YTMUSIC_PLAYLIST_ADD_RETRIES + 1})"
-                    )
-                    ytmusic.add_playlist_items(
+                if needs_reconciliation:
+                    missing_prefix = _reconcile_playlist_prefix(
+                        ytmusic,
                         playlist_id,
-                        chunk_missing,
-                        duplicates=True,
+                        expected_prefix,
                     )
+                    if missing_prefix is None:
+                        if attempt >= YTMUSIC_PLAYLIST_ADD_RETRIES:
+                            raise Exception(
+                                "YouTube Music did not return a readable "
+                                "playlist after an ambiguous write response"
+                            )
+                        cooldown = YTMUSIC_PLAYLIST_ADD_RETRY_COOLDOWN_SECONDS * (
+                            attempt + 1
+                        )
+                        time.sleep(cooldown)
+                        continue
+
+                    pending_video_ids = missing_prefix[-len(chunk):]
+                    if not pending_video_ids:
+                        print(
+                            f"YouTube Music playlist items 1-{end}/{total} "
+                            "were accepted despite the invalid response"
+                        )
+                        if progress_callback:
+                            progress_callback(end, total, playlist_id)
+                        break
+
+                    print(
+                        f"Reconciliation found {len(pending_video_ids)} "
+                        f"unconfirmed items through {end}/{total}"
+                    )
+                    needs_reconciliation = False
+
+                print(
+                    f"Adding YouTube Music playlist items "
+                    f"{end - len(pending_video_ids) + 1}-{end}/{total} "
+                    f"(attempt {attempt + 1}/{YTMUSIC_PLAYLIST_ADD_RETRIES + 1})"
+                )
+                ytmusic.add_playlist_items(
+                    playlist_id,
+                    pending_video_ids,
+                    duplicates=True,
+                )
 
                 if progress_callback:
                     progress_callback(end, total, playlist_id)
@@ -609,7 +653,7 @@ def _add_playlist_items_chunked(
                 if _is_youtube_auth_error(error):
                     raise
                 if (
-                    not _is_transient_youtube_error(error)
+                    not _is_retryable_youtube_error(error)
                     or attempt >= YTMUSIC_PLAYLIST_ADD_RETRIES
                 ):
                     raise
@@ -619,9 +663,11 @@ def _add_playlist_items_chunked(
                 )
                 print(
                     f"Temporary YouTube Music error while adding items "
-                    f"through {end}/{total}; reconciling after {cooldown:.0f}s: "
+                    f"through {end}/{total}; will reconcile after "
+                    f"{cooldown:.0f}s: "
                     f"{error}"
                 )
+                needs_reconciliation = True
                 time.sleep(cooldown)
 
 
