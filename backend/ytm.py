@@ -44,6 +44,15 @@ YTMUSIC_PLAYLIST_ADD_RETRY_COOLDOWN_SECONDS = float(
     os.getenv("YTMUSIC_PLAYLIST_ADD_RETRY_COOLDOWN_SECONDS", "10")
 )
 YTMUSIC_SEARCH_RETRIES = int(os.getenv("YTMUSIC_SEARCH_RETRIES", "3"))
+YTMUSIC_PLAYLIST_CREATE_RETRIES = int(
+    os.getenv("YTMUSIC_PLAYLIST_CREATE_RETRIES", "2")
+)
+YTMUSIC_PLAYLIST_CREATE_RECONCILE_ATTEMPTS = int(
+    os.getenv("YTMUSIC_PLAYLIST_CREATE_RECONCILE_ATTEMPTS", "6")
+)
+YTMUSIC_PLAYLIST_CREATE_RECONCILE_DELAY_SECONDS = float(
+    os.getenv("YTMUSIC_PLAYLIST_CREATE_RECONCILE_DELAY_SECONDS", "3")
+)
 YTMUSIC_SEARCH_FILTERS = [
     search_filter.strip()
     for search_filter in os.getenv("YTMUSIC_SEARCH_FILTERS", "songs,videos").split(",")
@@ -371,6 +380,89 @@ def _is_ytmusic_parser_error(error):
 
 def _is_retryable_youtube_error(error):
     return _is_transient_youtube_error(error) or _is_ytmusic_parser_error(error)
+
+
+def _library_playlists_with_retries(ytmusic):
+    last_error = None
+    for attempt in range(YTMUSIC_SEARCH_RETRIES):
+        try:
+            return ytmusic.get_library_playlists(limit=None)
+        except Exception as error:
+            last_error = error
+            if _is_youtube_auth_error(error):
+                raise
+            if not _is_retryable_youtube_error(error):
+                raise
+            if attempt < YTMUSIC_SEARCH_RETRIES - 1:
+                time.sleep(min(2**attempt, 8))
+    raise last_error
+
+
+def _new_playlist_id(ytmusic, title, existing_playlist_ids):
+    playlists = _library_playlists_with_retries(ytmusic)
+    candidates = [
+        playlist.get("playlistId")
+        for playlist in playlists
+        if playlist.get("playlistId") not in existing_playlist_ids
+        and playlist.get("title") == title
+    ]
+    candidates = [playlist_id for playlist_id in candidates if playlist_id]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _create_playlist_resilient(ytmusic, title):
+    existing_playlist_ids = {
+        playlist.get("playlistId")
+        for playlist in _library_playlists_with_retries(ytmusic)
+        if playlist.get("playlistId")
+    }
+
+    for attempt in range(YTMUSIC_PLAYLIST_CREATE_RETRIES + 1):
+        try:
+            playlist_id = ytmusic.create_playlist(title, "", "PRIVATE")
+            if isinstance(playlist_id, str) and playlist_id:
+                return playlist_id
+            raise ValueError("YouTube Music did not return a playlist id")
+        except Exception as error:
+            if _is_youtube_auth_error(error):
+                raise
+            if not _is_retryable_youtube_error(error):
+                raise
+
+            print(
+                "YouTube Music returned an ambiguous response while creating "
+                f"the playlist (attempt {attempt + 1}/"
+                f"{YTMUSIC_PLAYLIST_CREATE_RETRIES + 1}): {error}"
+            )
+            for reconcile_attempt in range(
+                YTMUSIC_PLAYLIST_CREATE_RECONCILE_ATTEMPTS
+            ):
+                time.sleep(YTMUSIC_PLAYLIST_CREATE_RECONCILE_DELAY_SECONDS)
+                try:
+                    playlist_id = _new_playlist_id(
+                        ytmusic,
+                        title,
+                        existing_playlist_ids,
+                    )
+                except Exception as reconcile_error:
+                    if _is_youtube_auth_error(reconcile_error):
+                        raise
+                    print(
+                        "Could not inspect the YouTube Music library while "
+                        f"reconciling playlist creation: {reconcile_error}"
+                    )
+                    continue
+                if playlist_id:
+                    print(
+                        "Recovered newly created YouTube Music playlist after "
+                        "an ambiguous response"
+                    )
+                    return playlist_id
+
+            if attempt >= YTMUSIC_PLAYLIST_CREATE_RETRIES:
+                raise
+
+            print("No new playlist appeared; retrying playlist creation")
 
 
 def _ytmusic_search(ytmusic, query, filter_name):
@@ -811,7 +903,7 @@ def create_ytm_playlist(
         name = playlist_details["name"]
 
         try:
-            playlist_id = ytmusic.create_playlist(name, "", "PRIVATE")
+            playlist_id = _create_playlist_resilient(ytmusic, name)
             print(f"Created empty YouTube Music playlist: {name}")
         except Exception as error:
             _raise_youtube_error("creating the empty playlist", error)
